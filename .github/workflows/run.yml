@@ -19,20 +19,20 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install System Deps
+      - name: Install Chrome & System Deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libnss3 libasound2 libatk-bridge2.0-0 libgtk-3-0 libgbm-dev
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb xvfb
 
       - name: Install Python Libs
         run: |
           pip install --upgrade pip
           pip install seleniumbase pyvirtualdisplay colorama nest_asyncio requests
 
-      - name: Install Browser & Driver
+      - name: Install Driver
         run: |
           seleniumbase install chromedriver
-          seleniumbase install google-chrome
 
       - name: Run Bot
         env: 
