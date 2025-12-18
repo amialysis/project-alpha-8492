@@ -23,10 +23,21 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TG_TOKEN")
 TELEGRAM_CHANNEL_ID = os.environ.get("TG_CHANNEL_ID")
 MY_EMAIL = os.environ.get("FJ_EMAIL")
 MY_PASSWORD = os.environ.get("FJ_PASSWORD")
-TARGET_URL = os.environ.get("FJ_URL") # URL is now hidden
+TARGET_URL = os.environ.get("FJ_URL") 
 
-if not TELEGRAM_BOT_TOKEN or not MY_EMAIL or not TARGET_URL:
-    print(f"{Fore.RED}❌ Error: Missing configuration (Check Secrets).{Style.RESET_ALL}")
+# Debugging Missing Secrets
+missing_secrets = []
+if not TELEGRAM_BOT_TOKEN: missing_secrets.append("TG_TOKEN")
+if not TELEGRAM_CHANNEL_ID: missing_secrets.append("TG_CHANNEL_ID")
+if not MY_EMAIL: missing_secrets.append("FJ_EMAIL")
+if not MY_PASSWORD: missing_secrets.append("FJ_PASSWORD")
+if not TARGET_URL: missing_secrets.append("FJ_URL")
+
+if missing_secrets:
+    print(f"\n{Fore.RED}❌ CRITICAL ERROR: The following secrets are MISSING in GitHub Settings:{Style.RESET_ALL}")
+    for secret in missing_secrets:
+        print(f"{Fore.YELLOW}   - {secret}{Style.RESET_ALL}")
+    print(f"\n{Fore.CYAN}👉 Please go to Settings > Secrets and variables > Actions and add them.{Style.RESET_ALL}")
     sys.exit(1)
 
 # Blacklist
