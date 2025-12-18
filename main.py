@@ -19,18 +19,19 @@ init(autoreset=True)
 # =================================================================
 # Config & Secrets
 # =================================================================
+# اصلاح نام‌ها طبق عکس ارسالی شما
 TELEGRAM_BOT_TOKEN = os.environ.get("TG_TOKEN")
-TELEGRAM_CHANNEL_ID = os.environ.get("TG_CHANNEL_ID")
-MY_EMAIL = os.environ.get("FJ_EMAIL")
-MY_PASSWORD = os.environ.get("FJ_PASSWORD")
+TELEGRAM_CHANNEL_ID = os.environ.get("TG_CHAT_ID") # قبلا TG_CHANNEL_ID بود
+MY_EMAIL = os.environ.get("MY_EMAIL")               # قبلا FJ_EMAIL بود
+MY_PASSWORD = os.environ.get("MY_PASSWORD")         # قبلا FJ_PASSWORD بود
 TARGET_URL = os.environ.get("FJ_URL") 
 
 # Debugging Missing Secrets
 missing_secrets = []
 if not TELEGRAM_BOT_TOKEN: missing_secrets.append("TG_TOKEN")
-if not TELEGRAM_CHANNEL_ID: missing_secrets.append("TG_CHANNEL_ID")
-if not MY_EMAIL: missing_secrets.append("FJ_EMAIL")
-if not MY_PASSWORD: missing_secrets.append("FJ_PASSWORD")
+if not TELEGRAM_CHANNEL_ID: missing_secrets.append("TG_CHAT_ID")
+if not MY_EMAIL: missing_secrets.append("MY_EMAIL")
+if not MY_PASSWORD: missing_secrets.append("MY_PASSWORD")
 if not TARGET_URL: missing_secrets.append("FJ_URL")
 
 if missing_secrets:
