@@ -1,14 +1,14 @@
 name: FJ Bot Runner
 
 on:
-  workflow_dispatch: 
+  workflow_dispatch:
   schedule:
-    - cron: '0 */5 * * *' 
+    - cron: '0 */5 * * *'
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 350 
+    timeout-minutes: 350
     
     steps:
       - name: Checkout code
@@ -19,20 +19,28 @@ jobs:
         with:
           python-version: '3.9'
 
-  
-      - name: Install Dependencies
+      - name: Install System Deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y google-chrome-stable xvfb
+          sudo apt-get install -y xvfb libnss3 libasound2 libatk-bridge2.0-0 libgtk-3-0 libgbm-dev
+
+      - name: Install Python Libs
+        run: |
+          pip install --upgrade pip
           pip install seleniumbase pyvirtualdisplay colorama nest_asyncio requests
 
-       
+      - name: Install Browser & Driver
+        run: |
+          seleniumbase install chromedriver
+          seleniumbase install google-chrome
+
       - name: Run Bot
+        
         env: 
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
-          TG_CHANNEL_ID: ${{ secrets.TG_CHANNEL_ID }}
-          FJ_EMAIL: ${{ secrets.FJ_EMAIL }}
-          FJ_PASSWORD: ${{ secrets.FJ_PASSWORD }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          MY_EMAIL: ${{ secrets.MY_EMAIL }}
+          MY_PASSWORD: ${{ secrets.MY_PASSWORD }}
           FJ_URL: ${{ secrets.FJ_URL }}
         run: |
-          xvfb-run --auto-servernum python main.py
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" python main.py
