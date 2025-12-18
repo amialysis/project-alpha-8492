@@ -8,6 +8,7 @@ import nest_asyncio
 import datetime
 import hashlib
 import os
+import pytz 
 from seleniumbase import Driver
 from pyvirtualdisplay import Display
 from colorama import Fore, Back, Style, init
@@ -17,19 +18,17 @@ nest_asyncio.apply()
 init(autoreset=True)
 
 # =================================================================
-# 🔐 Config & Secrets (Exact Match)
+# Config & Secrets (Full Names)
 # =================================================================
-TG_TOKEN = os.environ.get("TG_TOKEN")
-TG_CHAT_ID = os.environ.get("TG_CHAT_ID")  
-MY_EMAIL = os.environ.get("MY_EMAIL")       
-MY_PASSWORD = os.environ.get("MY_PASSWORD") 
-FJ_URL = os.environ.get("FJ_URL")
+TELEGRAM_BOT_TOKEN = os.environ.get("TG_TOKEN")
+TELEGRAM_CHANNEL_ID = os.environ.get("TG_CHAT_ID")
+MY_EMAIL = os.environ.get("MY_EMAIL")
+MY_PASSWORD = os.environ.get("MY_PASSWORD")
+TARGET_URL = os.environ.get("FJ_URL")
 
-if not TG_TOKEN or not TG_CHAT_ID or not MY_EMAIL or not MY_PASSWORD:
-    print(f"{Fore.RED}❌ Error: Secrets are missing!{Style.RESET_ALL}")
-    print(f"Token: {'OK' if TG_TOKEN else 'Missing'}")
-    print(f"ChatID: {'OK' if TG_CHAT_ID else 'Missing'}")
-    print(f"Email: {'OK' if MY_EMAIL else 'Missing'}")
+# Validation
+if not TELEGRAM_BOT_TOKEN or not MY_EMAIL or not TARGET_URL:
+    print(f"{Fore.RED}Err: Config Missing.{Style.RESET_ALL}")
     sys.exit(1)
 
 # Blacklist
@@ -44,11 +43,11 @@ START_TIME = datetime.datetime.utcnow() - datetime.timedelta(minutes=2)
 # =================================================================
 # Helpers
 # =================================================================
-def log(msg, color=Fore.WHITE):
+def sys_log(msg, color=Fore.WHITE):
     ts = datetime.datetime.now().strftime("%H:%M:%S")
     print(f"{Fore.CYAN}[{ts}]{color} {msg}{Style.RESET_ALL}")
 
-def parse_date(date_str):
+def parse_iso_date(date_str):
     if not date_str: return None
     try:
         date_str = date_str.replace('Z', '+00:00')
@@ -56,7 +55,17 @@ def parse_date(date_str):
         return datetime.datetime.fromisoformat(date_str)
     except: return None
 
-def clean_text(text):
+def convert_to_tehran(utc_dt):
+    """Convert UTC datetime object to Tehran Time String (HH:MM:SS)"""
+    if not utc_dt: return "N/A"
+    try:
+        tehran_tz = pytz.timezone('Asia/Tehran')
+        tehran_dt = utc_dt.astimezone(tehran_tz)
+        return tehran_dt.strftime("%H:%M:%S")
+    except:
+        return utc_dt.strftime("%H:%M:%S")
+
+def sanitize_text(text):
     if not text: return ""
     text = html.unescape(str(text))
     text = re.sub(r'</p>', '\n', text)
@@ -65,65 +74,80 @@ def clean_text(text):
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     return "\n".join(lines)
 
-def get_hash(t, d):
-    raw = f"{t}_{d if d else 'ND'}"
+def generate_signature(title, date_str):
+    raw = f"{title}_{date_str if date_str else 'ND'}"
     return hashlib.md5(raw.encode('utf-8')).hexdigest()
 
-def dispatch(data):
-    if not TG_TOKEN: return
+def dispatch_payload(data):
+    if not TELEGRAM_BOT_TOKEN: return
     
-    rt = data.get('Title', data.get('FJTitle', 'No Title'))
-    title = clean_text(rt)
-    p_date = data.get('PublishedDate') or data.get('PublishDate')
+    # Extract Title
+    raw_title = data.get('Title', data.get('FJTitle', 'No Title'))
+    title = sanitize_text(raw_title)
+    publish_date = data.get('PublishedDate') or data.get('PublishDate')
     
-    for w in BLACKLIST_WORDS:
-        if w.lower() in title.lower(): return
+    # 1. Blacklist Check
+    for word in BLACKLIST_WORDS:
+        if word.lower() in title.lower(): return
 
-    sig = get_hash(title, p_date)
+    # 2. Signature Check
+    sig = generate_signature(title, publish_date)
     if sig in SEEN_SIGNATURES: return
     SEEN_SIGNATURES.add(sig)
 
-    if p_date:
-        dt = parse_date(p_date)
-        if dt and dt < START_TIME: return
+    # 3. Time Check & Convert
+    news_time_str = "N/A"
+    if publish_date:
+        dt = parse_iso_date(publish_date)
+        if dt:
+            if dt < START_TIME: return
+            news_time_str = convert_to_tehran(dt)
 
-    desc = clean_text(data.get('Description', ''))
+    # Extract Details
+    description = sanitize_text(data.get('Description', ''))
     tags = data.get('Tags', [])
-    t_names = ", ".join([t.get('Name') for t in tags]) if tags else "None"
-    lbls = data.get('Labels', [])
-    l_str = ", ".join(lbls) if lbls else "None"
-    lvl = data.get('Level', 'N/A')
-    brk = data.get('Breaking', False)
-    act = data.get('Actual')
-    fcst = data.get('Forecast')
-    prev = data.get('Previous')
-
-    icon = "🚨" if brk else "📰"
-    if "Indices" in l_str or "Index" in l_str: icon = "📉"
+    tags_str = ", ".join([t.get('Name') for t in tags]) if tags else "-"
+    labels = data.get('Labels', [])
+    labels_str = ", ".join(labels) if labels else "-"
+    level = data.get('Level', '-')
+    breaking = data.get('Breaking', False)
     
-    msg = f"{icon} <b>{title}</b>\n\n"
-    if desc: msg += f"📝 <i>{desc}</i>\n\n"
-    
-    msg += "<b>🔍 INFO:</b>\n"
-    msg += f"🔸 <b>Lvl:</b> <code>{lvl}</code>\n"
-    msg += f"🔸 <b>Brk:</b> <code>{brk}</code>\n"
-    msg += f"🔸 <b>Tgs:</b> {t_names}\n"
-    msg += f"🔸 <b>Lbl:</b> {l_str}\n"
-    
-    if act or fcst:
-        msg += "\n<b>📊 DATA:</b>\n"
-        msg += f"Act: {act} | Fcst: {fcst} | Prev: {prev}\n"
+    # Financial Data
+    actual = data.get('Actual')
+    forecast = data.get('Forecast')
+    previous = data.get('Previous')
 
-    msg += "\n#Full_Analysis #FinancialJuice"
+    
+    icon = "🚨 " if breaking else ""
+    
+    msg = f"{icon}<b>{title}</b>\n\n"
+    
+    if description: 
+        msg += f"{description}\n\n"
+    
+    # Analysis Section
+    msg += "<b>INFO:</b>\n"
+    msg += f"Lvl: <code>{level}</code>\n"
+    msg += f"Brk: <code>{breaking}</code>\n"
+    msg += f"Tgs: {tags_str}\n"
+    msg += f"Lbl: {labels_str}\n"
+    
+    if actual or forecast:
+        msg += "\n<b>DATA:</b>\n"
+        msg += f"Act: {actual} | Fcst: {forecast} | Prev: {previous}\n"
 
-    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    # استفاده از TG_CHAT_ID مستقیم
-    payload = {"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True}
+   
+    msg += f"\nTime: {news_time_str}"
+
+    # Telegram API Push
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHANNEL_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True}
+    
     try:
         requests.post(url, json=payload, timeout=5)
-        log(f"-> Sent: {title[:20]}...", Fore.MAGENTA)
+        sys_log(f"Packet: SENT ({len(title)}b)", Fore.MAGENTA)
     except Exception as e:
-        log(f"err: {e}", Fore.RED)
+        sys_log(f"Net: Err", Fore.RED)
 
 # =================================================================
 # Injection Script
@@ -146,14 +170,14 @@ window.WebSocket = function(...args) {
 # =================================================================
 # Main Loop
 # =================================================================
-def run():
-    log(f"System Active.", Fore.CYAN)
+def run_service():
+    sys_log(f"Core: Online", Fore.CYAN)
     display = Display(visible=0, size=(1920, 1080))
     display.start()
     driver = Driver(uc=True, headless=False)
 
     try:
-        driver.get(FJ_URL)
+        driver.get(TARGET_URL)
         time.sleep(5)
 
         try:
@@ -163,20 +187,19 @@ def run():
                 btns = driver.find_elements("xpath", "//div[contains(@class, 'login')]")
                 if btns: btns[0].click()
             time.sleep(3)
-            # استفاده مستقیم از MY_EMAIL و MY_PASSWORD
             driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputEmail").send_keys(MY_EMAIL)
             driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputPassword").send_keys(MY_PASSWORD)
             driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_btnLogin").click()
-            log("Auth sent.", Fore.GREEN)
+            sys_log("Auth: Payload Sent", Fore.GREEN)
             time.sleep(20)
         except: pass
 
         if any('.ASPXAUTH' in c['name'] for c in driver.get_cookies()):
-            log("State: OK", Fore.GREEN)
+            sys_log("Status: Verified", Fore.GREEN)
         else:
-            log("State: Unverified", Fore.RED)
+            sys_log("Status: Guest Mode", Fore.RED)
 
-        log("Listening...", Fore.GREEN)
+        sys_log("Link: Established", Fore.GREEN)
         
         while True:
             try: act = driver.execute_script("return window.ws_spy_active;")
@@ -194,19 +217,20 @@ def run():
                     return window.ws_captured_logs.splice(0, window.ws_captured_logs.length);
                 """)
                 if logs:
-                    for raw in logs:
-                        if raw == "{}" or raw == '{"S":1,"M":[]}': continue
+                    for raw_json in logs:
+                        if raw_json == "{}" or raw_json == '{"S":1,"M":[]}': continue
                         try:
-                            d = json.loads(raw)
-                            if 'M' in d:
-                                for i in d['M']:
-                                    if 'A' in i and len(i['A']) > 0:
-                                        p_str = i['A'][0]
+                            data_obj = json.loads(raw_json)
+                            if 'M' in data_obj:
+                                for item in data_obj['M']:
+                                    if 'A' in item and len(item['A']) > 0:
+                                        payload_str = item['A'][0]
                                         try:
-                                            if isinstance(p_str, str) and (p_str.startswith('[') or p_str.startswith('{')):
-                                                in_lst = json.loads(p_str)
-                                                if isinstance(in_lst, list):
-                                                    for n in in_lst: dispatch(n)
+                                            if isinstance(payload_str, str) and (payload_str.startswith('[') or payload_str.startswith('{')):
+                                                inner_list = json.loads(payload_str)
+                                                if isinstance(inner_list, list):
+                                                    for news_item in inner_list: 
+                                                        dispatch_payload(news_item)
                                         except: pass
                         except: pass
             except: pass
@@ -220,4 +244,4 @@ def run():
         except: pass
 
 if __name__ == "__main__":
-    run()
+    run_service()
