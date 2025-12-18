@@ -16,23 +16,20 @@ from colorama import Fore, Back, Style, init
 nest_asyncio.apply()
 init(autoreset=True)
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TG_TOKEN")
-TELEGRAM_CHANNEL_ID = os.environ.get("TG_CHAT_ID") 
-MY_EMAIL = os.environ.get("MY_EMAIL")               
-MY_PASSWORD = os.environ.get("MY_PASSWORD")         
-TARGET_URL = os.environ.get("FJ_URL") 
+# =================================================================
+# 🔐 Config & Secrets (Exact Match)
+# =================================================================
+TG_TOKEN = os.environ.get("TG_TOKEN")
+TG_CHAT_ID = os.environ.get("TG_CHAT_ID")  
+MY_EMAIL = os.environ.get("MY_EMAIL")       
+MY_PASSWORD = os.environ.get("MY_PASSWORD") 
+FJ_URL = os.environ.get("FJ_URL")
 
-# Debug check
-missing = []
-if not TELEGRAM_BOT_TOKEN: missing.append("TG_TOKEN")
-if not TELEGRAM_CHANNEL_ID: missing.append("TG_CHAT_ID")
-if not MY_EMAIL: missing.append("MY_EMAIL")
-if not MY_PASSWORD: missing.append("MY_PASSWORD")
-if not TARGET_URL: missing.append("FJ_URL")
-
-if missing:
-    print(f"\n{Fore.RED}❌ CRITICAL ERROR: Missing Secrets in run.yml mapping:{Style.RESET_ALL}")
-    for m in missing: print(f"{Fore.YELLOW}   - {m}{Style.RESET_ALL}")
+if not TG_TOKEN or not TG_CHAT_ID or not MY_EMAIL or not MY_PASSWORD:
+    print(f"{Fore.RED}❌ Error: Secrets are missing!{Style.RESET_ALL}")
+    print(f"Token: {'OK' if TG_TOKEN else 'Missing'}")
+    print(f"ChatID: {'OK' if TG_CHAT_ID else 'Missing'}")
+    print(f"Email: {'OK' if MY_EMAIL else 'Missing'}")
     sys.exit(1)
 
 # Blacklist
@@ -73,7 +70,7 @@ def get_hash(t, d):
     return hashlib.md5(raw.encode('utf-8')).hexdigest()
 
 def dispatch(data):
-    if not TELEGRAM_BOT_TOKEN: return
+    if not TG_TOKEN: return
     
     rt = data.get('Title', data.get('FJTitle', 'No Title'))
     title = clean_text(rt)
@@ -119,8 +116,9 @@ def dispatch(data):
 
     msg += "\n#Full_Analysis #FinancialJuice"
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHANNEL_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True}
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    # استفاده از TG_CHAT_ID مستقیم
+    payload = {"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True}
     try:
         requests.post(url, json=payload, timeout=5)
         log(f"-> Sent: {title[:20]}...", Fore.MAGENTA)
@@ -155,7 +153,7 @@ def run():
     driver = Driver(uc=True, headless=False)
 
     try:
-        driver.get(TARGET_URL)
+        driver.get(FJ_URL)
         time.sleep(5)
 
         try:
@@ -165,6 +163,7 @@ def run():
                 btns = driver.find_elements("xpath", "//div[contains(@class, 'login')]")
                 if btns: btns[0].click()
             time.sleep(3)
+            # استفاده مستقیم از MY_EMAIL و MY_PASSWORD
             driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputEmail").send_keys(MY_EMAIL)
             driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputPassword").send_keys(MY_PASSWORD)
             driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_btnLogin").click()
