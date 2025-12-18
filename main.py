@@ -16,28 +16,23 @@ from colorama import Fore, Back, Style, init
 nest_asyncio.apply()
 init(autoreset=True)
 
-# =================================================================
-# Config & Secrets
-# =================================================================
 TELEGRAM_BOT_TOKEN = os.environ.get("TG_TOKEN")
 TELEGRAM_CHANNEL_ID = os.environ.get("TG_CHAT_ID") 
-MY_EMAIL = os.environ.get("MY_EMAIL")              
-MY_PASSWORD = os.environ.get("MY_PASSWORD")        
+MY_EMAIL = os.environ.get("MY_EMAIL")               
+MY_PASSWORD = os.environ.get("MY_PASSWORD")         
 TARGET_URL = os.environ.get("FJ_URL") 
 
-# Debugging Missing Secrets
-missing_secrets = []
-if not TELEGRAM_BOT_TOKEN: missing_secrets.append("TG_TOKEN")
-if not TELEGRAM_CHANNEL_ID: missing_secrets.append("TG_CHAT_ID")
-if not MY_EMAIL: missing_secrets.append("MY_EMAIL")
-if not MY_PASSWORD: missing_secrets.append("MY_PASSWORD")
-if not TARGET_URL: missing_secrets.append("FJ_URL")
+# Debug check
+missing = []
+if not TELEGRAM_BOT_TOKEN: missing.append("TG_TOKEN")
+if not TELEGRAM_CHANNEL_ID: missing.append("TG_CHAT_ID")
+if not MY_EMAIL: missing.append("MY_EMAIL")
+if not MY_PASSWORD: missing.append("MY_PASSWORD")
+if not TARGET_URL: missing.append("FJ_URL")
 
-if missing_secrets:
-    print(f"\n{Fore.RED}❌ CRITICAL ERROR: The following secrets are MISSING in GitHub Settings:{Style.RESET_ALL}")
-    for secret in missing_secrets:
-        print(f"{Fore.YELLOW}   - {secret}{Style.RESET_ALL}")
-    print(f"\n{Fore.CYAN}👉 Please go to Settings > Secrets and variables > Actions and add them.{Style.RESET_ALL}")
+if missing:
+    print(f"\n{Fore.RED}❌ CRITICAL ERROR: Missing Secrets in run.yml mapping:{Style.RESET_ALL}")
+    for m in missing: print(f"{Fore.YELLOW}   - {m}{Style.RESET_ALL}")
     sys.exit(1)
 
 # Blacklist
@@ -47,7 +42,6 @@ BLACKLIST_WORDS = []
 # State Management
 # =================================================================
 SEEN_SIGNATURES = set()
-# Start time buffer (UTC)
 START_TIME = datetime.datetime.utcnow() - datetime.timedelta(minutes=2)
 
 # =================================================================
@@ -85,21 +79,17 @@ def dispatch(data):
     title = clean_text(rt)
     p_date = data.get('PublishedDate') or data.get('PublishDate')
     
-    # Check Blacklist
     for w in BLACKLIST_WORDS:
         if w.lower() in title.lower(): return
 
-    # Check Signature
     sig = get_hash(title, p_date)
     if sig in SEEN_SIGNATURES: return
     SEEN_SIGNATURES.add(sig)
 
-    # Check Time
     if p_date:
         dt = parse_date(p_date)
         if dt and dt < START_TIME: return
 
-    # Extract
     desc = clean_text(data.get('Description', ''))
     tags = data.get('Tags', [])
     t_names = ", ".join([t.get('Name') for t in tags]) if tags else "None"
@@ -111,7 +101,6 @@ def dispatch(data):
     fcst = data.get('Forecast')
     prev = data.get('Previous')
 
-    # Format
     icon = "🚨" if brk else "📰"
     if "Indices" in l_str or "Index" in l_str: icon = "📉"
     
@@ -130,7 +119,6 @@ def dispatch(data):
 
     msg += "\n#Full_Analysis #FinancialJuice"
 
-    # Send
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHANNEL_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True}
     try:
@@ -167,11 +155,9 @@ def run():
     driver = Driver(uc=True, headless=False)
 
     try:
-        # Use Secret URL
         driver.get(TARGET_URL)
         time.sleep(5)
 
-        # Auth
         try:
             btns = driver.find_elements("xpath", "//a[contains(text(), 'Sign In')]")
             if btns: btns[0].click()
