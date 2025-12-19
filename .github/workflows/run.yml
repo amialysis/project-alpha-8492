@@ -1,5 +1,10 @@
 name: FJ Bot Runner
 
+
+concurrency:
+  group: fj-bot-production
+  cancel-in-progress: true
+
 on:
   workflow_dispatch:
   schedule:
@@ -8,7 +13,7 @@ on:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 300
     
     steps:
       - name: Checkout code
@@ -19,7 +24,6 @@ jobs:
         with:
           python-version: '3.9'
 
-      
       - name: Install System Deps & Chrome
         run: |
           sudo apt-get update
