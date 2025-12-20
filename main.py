@@ -36,6 +36,7 @@ BLACKLIST_WORDS = []
 # State
 # =================================================================
 SEEN_SIGNATURES = set()
+# Filter news older than 2 minutes before start
 START_TIME = datetime.datetime.utcnow() - datetime.timedelta(minutes=2)
 
 # =================================================================
@@ -48,16 +49,28 @@ def sys_log(msg, color=Fore.WHITE):
 def parse_iso_date(date_str):
     if not date_str: return None
     try:
-        date_str = date_str.replace('Z', '+00:00')
-        if "." in date_str: date_str = date_str.split(".")[0] + "+00:00"
+        
+        date_str = str(date_str).replace('Z', '+00:00')
+        
+        if '+' not in date_str and 'Z' not in date_str:
+             date_str += '+00:00'
+             
+        if "." in date_str: 
+            s
+            date_str = date_str.split(".")[0] + "+00:00"
+            
         return datetime.datetime.fromisoformat(date_str)
     except: return None
 
 def convert_to_tehran(utc_dt):
-    """Convert UTC to Tehran Time (HH:MM:SS)"""
+    """Convert UTC datetime object to Tehran Time String (HH:MM:SS)"""
     if not utc_dt: return "N/A"
     try:
         tehran_tz = pytz.timezone('Asia/Tehran')
+        # Check if dt is aware (has timezone)
+        if utc_dt.tzinfo is None:
+            utc_dt = utc_dt.replace(tzinfo=datetime.timezone.utc)
+            
         tehran_dt = utc_dt.astimezone(tehran_tz)
         return tehran_dt.strftime("%H:%M:%S")
     except:
@@ -79,16 +92,18 @@ def generate_signature(title, date_str):
 def dispatch_payload(data):
     if not TELEGRAM_BOT_TOKEN: return
     
-    
+    # 1. Title Extraction
     raw_title = data.get('Title', data.get('FJTitle', 'No Title'))
     title = sanitize_text(raw_title)
-    publish_date = data.get('PublishedDate') or data.get('PublishDate')
     
+    # Check all possible date fields
+    publish_date = data.get('DatePublished') or data.get('PublishedDate') or data.get('PublishDate') or data.get('Date')
     
+    # 2. Blacklist Check
     for word in BLACKLIST_WORDS:
         if word.lower() in title.lower(): return
 
-    
+    # 3. Signature Check
     sig = generate_signature(title, publish_date)
     if sig in SEEN_SIGNATURES: return
     SEEN_SIGNATURES.add(sig)
@@ -98,6 +113,7 @@ def dispatch_payload(data):
     if publish_date:
         dt = parse_iso_date(publish_date)
         if dt:
+            
             if dt < START_TIME: return
             news_time_str = convert_to_tehran(dt)
 
@@ -105,53 +121,56 @@ def dispatch_payload(data):
     news_id = data.get('NewsID', data.get('Id', '-'))
     
     tags = data.get('Tags', [])
-    tags_str = ", ".join([t.get('Name') for t in tags]) if tags else "-"
+    tags_str = ", ".join([str(t.get('Name')) for t in tags]) if tags else "-"
     
     breaking = data.get('Breaking', False)
     level = data.get('Level', '-')
     
-    # Link Logic
-    link = data.get('RURL', '')
-    if not link: link = data.get('EURL', '-')
+    # Links
+    r_link = data.get('RURL', '-')
+    e_link = data.get('EURL', '-')
+    if not r_link: r_link = "-"
+    if not e_link: e_link = "-"
     
     labels = data.get('Labels', [])
-    labels_str = ", ".join(labels) if labels else "-"
+    labels_str = ", ".join([str(l) for l in labels]) if labels else "-"
     
     img_link = data.get('Img', '-')
+    if not img_link: img_link = "-"
+    
     description = sanitize_text(data.get('Description', ''))
 
-    # Financial Data Extraction
+    # Financial Data
     actual = data.get('Actual')
     forecast = data.get('Forecast')
     previous = data.get('Previous')
 
     # --- Message Construction ---
-    
-    # Header: Icon + Title
     icon = "🚨 " if breaking else ""
+    
     msg = f"{icon}<b>{title}</b>\n\n"
     
-    # Body: Description
     if description: 
         msg += f"{description}\n\n"
     
-    # Body
+    
     msg += "<b>INFO:</b>\n"
     msg += f"NewsID: {news_id}\n"
     msg += f"Tags: {tags_str}\n"
     msg += f"Breaking: {breaking}\n"
     msg += f"Level: {level}\n"
-    msg += f"RURL: {link}\n"
+    msg += f"RURL: {r_link}\n"
+    msg += f"EURL: {e_link}\n"  # Added EURL
     msg += f"Labels: {labels_str}\n"
     msg += f"Img: {img_link}\n"
     msg += f"DatePublished: {news_time_str}\n"
 
-    # Footer
+    
     if actual or forecast:
         msg += "\n<b>DATA:</b>\n"
         msg += f"Act: {actual} | Fcst: {forecast} | Prev: {previous}\n"
 
-    
+    # Send
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHANNEL_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True}
     
@@ -162,7 +181,7 @@ def dispatch_payload(data):
         sys_log(f"Net: Err", Fore.RED)
 
 # =================================================================
-# Script
+#Script
 # =================================================================
 JS_PAYLOAD = """
 window.ws_spy_active = true;
@@ -182,15 +201,10 @@ window.WebSocket = function(...args) {
 # =================================================================
 # Main
 # =================================================================
-def run_service():
-    sys_log(f"Core: Online", Fore.CYAN)
-    display = Display(visible=0, size=(1920, 1080))
-    display.start()
-    driver = Driver(uc=True, headless=False)
-
+def perform_login(driver):
     try:
         driver.get(TARGET_URL)
-        time.sleep(5)
+        time.sleep(7)
 
         try:
             btns = driver.find_elements("xpath", "//a[contains(text(), 'Sign In')]")
@@ -198,19 +212,54 @@ def run_service():
             else:
                 btns = driver.find_elements("xpath", "//div[contains(@class, 'login')]")
                 if btns: btns[0].click()
-            time.sleep(3)
-            driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputEmail").send_keys(MY_EMAIL)
-            driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputPassword").send_keys(MY_PASSWORD)
-            driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_btnLogin").click()
-            sys_log("Auth: Payload Sent", Fore.GREEN)
-            time.sleep(20)
-        except: pass
+        except: 
+            sys_log("Login btn skipped/not found", Fore.YELLOW)
 
+        time.sleep(3)
+
+        driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputEmail").clear()
+        driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputEmail").send_keys(MY_EMAIL)
+        
+        driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputPassword").clear()
+        driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputPassword").send_keys(MY_PASSWORD)
+        
+        driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_btnLogin").click()
+        sys_log("Auth: Credentials Sent", Fore.GREEN)
+        
+        time.sleep(20)
+        
         if any('.ASPXAUTH' in c['name'] for c in driver.get_cookies()):
-            sys_log("Status: Verified", Fore.GREEN)
-        else:
-            sys_log("Status: Guest Mode", Fore.RED)
+            return True
+        return False
 
+    except Exception as e:
+        sys_log(f"Auth Err: {e}", Fore.RED)
+        return False
+
+def run_service():
+    sys_log(f"Core: Online", Fore.CYAN)
+    display = Display(visible=0, size=(1920, 1080))
+    display.start()
+    driver = Driver(uc=True, headless=False)
+
+    try:
+        logged_in = False
+        for attempt in range(1, 4):
+            sys_log(f"Auth: Attempt {attempt}/3...", Fore.YELLOW)
+            if perform_login(driver):
+                sys_log("Status: Verified ✅", Fore.GREEN)
+                logged_in = True
+                break
+            else:
+                sys_log("Status: Failed ❌ (Retrying...)", Fore.RED)
+                time.sleep(5)
+        
+        if not logged_in:
+            sys_log("CRITICAL: Login failed 3 times. Exiting.", Fore.RED)
+            driver.quit()
+            display.stop()
+            sys.exit(1)
+        
         sys_log("Link: Established", Fore.GREEN)
         
         while True:
