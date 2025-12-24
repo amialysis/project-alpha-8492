@@ -36,7 +36,6 @@ BLACKLIST_WORDS = []
 # State
 # =================================================================
 SEEN_SIGNATURES = set()
-# Filter news older than 2 minutes before start
 START_TIME = datetime.datetime.utcnow() - datetime.timedelta(minutes=2)
 
 # =================================================================
@@ -49,28 +48,20 @@ def sys_log(msg, color=Fore.WHITE):
 def parse_iso_date(date_str):
     if not date_str: return None
     try:
-        
         date_str = str(date_str).replace('Z', '+00:00')
-        
         if '+' not in date_str and 'Z' not in date_str:
              date_str += '+00:00'
-             
         if "." in date_str: 
-            s
             date_str = date_str.split(".")[0] + "+00:00"
-            
         return datetime.datetime.fromisoformat(date_str)
     except: return None
 
 def convert_to_tehran(utc_dt):
-    """Convert UTC datetime object to Tehran Time String (HH:MM:SS)"""
     if not utc_dt: return "N/A"
     try:
         tehran_tz = pytz.timezone('Asia/Tehran')
-        # Check if dt is aware (has timezone)
         if utc_dt.tzinfo is None:
             utc_dt = utc_dt.replace(tzinfo=datetime.timezone.utc)
-            
         tehran_dt = utc_dt.astimezone(tehran_tz)
         return tehran_dt.strftime("%H:%M:%S")
     except:
@@ -92,67 +83,49 @@ def generate_signature(title, date_str):
 def dispatch_payload(data):
     if not TELEGRAM_BOT_TOKEN: return
     
-    # 1. Title Extraction
     raw_title = data.get('Title', data.get('FJTitle', 'No Title'))
     title = sanitize_text(raw_title)
     
-    # Check all possible date fields
     publish_date = data.get('DatePublished') or data.get('PublishedDate') or data.get('PublishDate') or data.get('Date')
     
-    # 2. Blacklist Check
     for word in BLACKLIST_WORDS:
         if word.lower() in title.lower(): return
 
-    # 3. Signature Check
     sig = generate_signature(title, publish_date)
     if sig in SEEN_SIGNATURES: return
     SEEN_SIGNATURES.add(sig)
 
-    
     news_time_str = "N/A"
     if publish_date:
         dt = parse_iso_date(publish_date)
         if dt:
-            
             if dt < START_TIME: return
             news_time_str = convert_to_tehran(dt)
 
-    # --- Extract Fields ---
     news_id = data.get('NewsID', data.get('Id', '-'))
-    
     tags = data.get('Tags', [])
     tags_str = ", ".join([str(t.get('Name')) for t in tags]) if tags else "-"
-    
     breaking = data.get('Breaking', False)
     level = data.get('Level', '-')
     
-    # Links
-    r_link = data.get('RURL', '-')
-    e_link = data.get('EURL', '-')
+    r_link = data.get('RURL', '')
+    e_link = data.get('EURL', '')
     if not r_link: r_link = "-"
     if not e_link: e_link = "-"
     
     labels = data.get('Labels', [])
     labels_str = ", ".join([str(l) for l in labels]) if labels else "-"
-    
     img_link = data.get('Img', '-')
     if not img_link: img_link = "-"
     
     description = sanitize_text(data.get('Description', ''))
-
-    # Financial Data
     actual = data.get('Actual')
     forecast = data.get('Forecast')
     previous = data.get('Previous')
 
-    # --- Message Construction ---
     icon = "🚨 " if breaking else ""
-    
     msg = f"{icon}<b>{title}</b>\n\n"
-    
-    if description: 
-        msg += f"{description}\n\n"
-    
+    if description: msg += f"{description}\n\n"
     
     msg += "<b>INFO:</b>\n"
     msg += f"NewsID: {news_id}\n"
@@ -160,17 +133,15 @@ def dispatch_payload(data):
     msg += f"Breaking: {breaking}\n"
     msg += f"Level: {level}\n"
     msg += f"RURL: {r_link}\n"
-    msg += f"EURL: {e_link}\n"  # Added EURL
+    msg += f"EURL: {e_link}\n"
     msg += f"Labels: {labels_str}\n"
     msg += f"Img: {img_link}\n"
     msg += f"DatePublished: {news_time_str}\n"
 
-    
     if actual or forecast:
         msg += "\n<b>DATA:</b>\n"
         msg += f"Act: {actual} | Fcst: {forecast} | Prev: {previous}\n"
 
-    # Send
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHANNEL_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True}
     
@@ -181,7 +152,7 @@ def dispatch_payload(data):
         sys_log(f"Net: Err", Fore.RED)
 
 # =================================================================
-#Script
+# Spy Script
 # =================================================================
 JS_PAYLOAD = """
 window.ws_spy_active = true;
@@ -199,12 +170,15 @@ window.WebSocket = function(...args) {
 """
 
 # =================================================================
-# Main
+# Main Loop (With Retry & Debug)
 # =================================================================
 def perform_login(driver):
     try:
         driver.get(TARGET_URL)
         time.sleep(7)
+
+        # Debug: Initial Page
+        sys_log(f"Debug: Page Title -> {driver.title}", Fore.CYAN)
 
         try:
             btns = driver.find_elements("xpath", "//a[contains(text(), 'Sign In')]")
@@ -224,12 +198,27 @@ def perform_login(driver):
         driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputPassword").send_keys(MY_PASSWORD)
         
         driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_btnLogin").click()
-        sys_log("Auth: Credentials Sent", Fore.GREEN)
+        sys_log("Auth: Credentials Sent... Waiting...", Fore.GREEN)
         
         time.sleep(20)
         
-        if any('.ASPXAUTH' in c['name'] for c in driver.get_cookies()):
+        # --- DEEP DEBUG: Check Login State ---
+        sys_log(f"Debug: Post-Login URL -> {driver.current_url}", Fore.CYAN)
+        
+        cookies = driver.get_cookies()
+        
+        if any('.ASPXAUTH' in c['name'] for c in cookies):
+            sys_log("Debug: Auth Token (.ASPXAUTH) DETECTED! ✅", Fore.GREEN)
             return True
+        
+        # If failed, look for error message
+        sys_log("Debug: Auth Token MISSING. Checking page for errors...", Fore.RED)
+        try:
+            body_text = driver.find_element("tag name", "body").text
+            if "Invalid login" in body_text or "failed" in body_text:
+                sys_log("Debug: Detected Login Error Message on page.", Fore.RED)
+        except: pass
+        
         return False
 
     except Exception as e:
@@ -262,6 +251,8 @@ def run_service():
         
         sys_log("Link: Established", Fore.GREEN)
         
+        last_msg_time = time.time()
+        
         while True:
             try: act = driver.execute_script("return window.ws_spy_active;")
             except: act = False
@@ -278,6 +269,7 @@ def run_service():
                     return window.ws_captured_logs.splice(0, window.ws_captured_logs.length);
                 """)
                 if logs:
+                    last_msg_time = time.time()
                     for raw_json in logs:
                         if raw_json == "{}" or raw_json == '{"S":1,"M":[]}': continue
                         try:
@@ -295,6 +287,11 @@ def run_service():
                                         except: pass
                         except: pass
             except: pass
+            
+            if time.time() - last_msg_time > 1800:
+                sys_log("Heartbeat Lost (30m). Restarting...", Fore.RED)
+                break 
+
             time.sleep(1)
 
     except KeyboardInterrupt: pass
