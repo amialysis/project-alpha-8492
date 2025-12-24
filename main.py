@@ -36,8 +36,8 @@ BLACKLIST_WORDS = []
 # State
 # =================================================================
 SEEN_SIGNATURES = set()
-# Keep last 2 minutes history only to prevent flooding on restart
-START_TIME = datetime.datetime.utcnow() - datetime.timedelta(minutes=2)
+# FIX: Use timezone-aware UTC time to match incoming data format and avoid comparison errors
+START_TIME = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=2)
 
 # =================================================================
 # Helpers
