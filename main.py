@@ -36,7 +36,8 @@ BLACKLIST_WORDS = []
 # State
 # =================================================================
 SEEN_SIGNATURES = set()
-START_TIME = datetime.datetime.utcnow() - datetime.timedelta(minutes=2)
+# بافر زمانی ۳۰ دقیقه برای اطمینان بیشتر
+START_TIME = datetime.datetime.utcnow() - datetime.timedelta(minutes=30)
 
 # =================================================================
 # Helpers
@@ -86,22 +87,33 @@ def dispatch_payload(data):
     raw_title = data.get('Title', data.get('FJTitle', 'No Title'))
     title = sanitize_text(raw_title)
     
+    # Debug: خبر دریافت شد
+    # sys_log(f"Processing: {title[:30]}...", Fore.LIGHTBLACK_EX)
+
     publish_date = data.get('DatePublished') or data.get('PublishedDate') or data.get('PublishDate') or data.get('Date')
     
     for word in BLACKLIST_WORDS:
         if word.lower() in title.lower(): return
 
+    # Signature Check
     sig = generate_signature(title, publish_date)
-    if sig in SEEN_SIGNATURES: return
+    if sig in SEEN_SIGNATURES:
+        # sys_log(f"Skip: Duplicate ({title[:15]}...)", Fore.LIGHTBLACK_EX)
+        return
     SEEN_SIGNATURES.add(sig)
 
+    # Time Check
     news_time_str = "N/A"
     if publish_date:
         dt = parse_iso_date(publish_date)
         if dt:
-            if dt < START_TIME: return
+            if dt < START_TIME:
+                # لاگ مهم: اگر به خاطر زمان رد شد بفهمیم
+                sys_log(f"Skip: Old Time {dt.strftime('%H:%M')} < Start {START_TIME.strftime('%H:%M')}", Fore.YELLOW)
+                return
             news_time_str = convert_to_tehran(dt)
 
+    # --- Extract Fields ---
     news_id = data.get('NewsID', data.get('Id', '-'))
     tags = data.get('Tags', [])
     tags_str = ", ".join([str(t.get('Name')) for t in tags]) if tags else "-"
@@ -123,6 +135,7 @@ def dispatch_payload(data):
     forecast = data.get('Forecast')
     previous = data.get('Previous')
 
+    # --- Construct Message ---
     icon = "🚨 " if breaking else ""
     msg = f"{icon}<b>{title}</b>\n\n"
     if description: msg += f"{description}\n\n"
@@ -147,9 +160,9 @@ def dispatch_payload(data):
     
     try:
         requests.post(url, json=payload, timeout=5)
-        sys_log(f"Packet: SENT ({len(title)}b)", Fore.MAGENTA)
+        sys_log(f"Packet: SENT ({len(title)}b) ✅", Fore.MAGENTA)
     except Exception as e:
-        sys_log(f"Net: Err", Fore.RED)
+        sys_log(f"Net: Err {e}", Fore.RED)
 
 # =================================================================
 # Spy Script
@@ -170,15 +183,12 @@ window.WebSocket = function(...args) {
 """
 
 # =================================================================
-# Main Loop (With Retry & Debug)
+# Main Loop (Retry Logic)
 # =================================================================
 def perform_login(driver):
     try:
         driver.get(TARGET_URL)
         time.sleep(7)
-
-        # Debug: Initial Page
-        sys_log(f"Debug: Page Title -> {driver.title}", Fore.CYAN)
 
         try:
             btns = driver.find_elements("xpath", "//a[contains(text(), 'Sign In')]")
@@ -186,47 +196,24 @@ def perform_login(driver):
             else:
                 btns = driver.find_elements("xpath", "//div[contains(@class, 'login')]")
                 if btns: btns[0].click()
-        except: 
-            sys_log("Login btn skipped/not found", Fore.YELLOW)
+        except: pass
 
         time.sleep(3)
-
         driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputEmail").clear()
         driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputEmail").send_keys(MY_EMAIL)
-        
         driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputPassword").clear()
         driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputPassword").send_keys(MY_PASSWORD)
-        
         driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_btnLogin").click()
-        sys_log("Auth: Credentials Sent... Waiting...", Fore.GREEN)
+        sys_log("Auth: Sent", Fore.GREEN)
+        time.sleep(15)
         
-        time.sleep(20)
-        
-        # --- DEEP DEBUG: Check Login State ---
-        sys_log(f"Debug: Post-Login URL -> {driver.current_url}", Fore.CYAN)
-        
-        cookies = driver.get_cookies()
-        
-        if any('.ASPXAUTH' in c['name'] for c in cookies):
-            sys_log("Debug: Auth Token (.ASPXAUTH) DETECTED! ✅", Fore.GREEN)
+        if any('.ASPXAUTH' in c['name'] for c in driver.get_cookies()):
             return True
-        
-        # If failed, look for error message
-        sys_log("Debug: Auth Token MISSING. Checking page for errors...", Fore.RED)
-        try:
-            body_text = driver.find_element("tag name", "body").text
-            if "Invalid login" in body_text or "failed" in body_text:
-                sys_log("Debug: Detected Login Error Message on page.", Fore.RED)
-        except: pass
-        
         return False
-
-    except Exception as e:
-        sys_log(f"Auth Err: {e}", Fore.RED)
-        return False
+    except: return False
 
 def run_service():
-    sys_log(f"Core: Online", Fore.CYAN)
+    sys_log(f"Core: Online (Start Filter: {START_TIME.strftime('%H:%M:%S')})", Fore.CYAN)
     display = Display(visible=0, size=(1920, 1080))
     display.start()
     driver = Driver(uc=True, headless=False)
@@ -234,22 +221,21 @@ def run_service():
     try:
         logged_in = False
         for attempt in range(1, 4):
-            sys_log(f"Auth: Attempt {attempt}/3...", Fore.YELLOW)
             if perform_login(driver):
                 sys_log("Status: Verified ✅", Fore.GREEN)
                 logged_in = True
                 break
             else:
-                sys_log("Status: Failed ❌ (Retrying...)", Fore.RED)
+                sys_log(f"Auth Fail {attempt}/3", Fore.RED)
                 time.sleep(5)
         
         if not logged_in:
-            sys_log("CRITICAL: Login failed 3 times. Exiting.", Fore.RED)
+            sys_log("FATAL: Login Failed", Fore.RED)
             driver.quit()
             display.stop()
             sys.exit(1)
         
-        sys_log("Link: Established", Fore.GREEN)
+        sys_log("Link: Listening...", Fore.GREEN)
         
         last_msg_time = time.time()
         
@@ -271,8 +257,14 @@ def run_service():
                 if logs:
                     last_msg_time = time.time()
                     for raw_json in logs:
+                        # نمایش زنده بودن خط
+                        # print(".", end="", flush=True) 
+                        
                         if raw_json == "{}" or raw_json == '{"S":1,"M":[]}': continue
                         try:
+                            # DEBUG: Log incoming packet size
+                            # sys_log(f"Raw Packet: {len(raw_json)} chars", Fore.LIGHTBLACK_EX)
+                            
                             data_obj = json.loads(raw_json)
                             if 'M' in data_obj:
                                 for item in data_obj['M']:
@@ -288,8 +280,9 @@ def run_service():
                         except: pass
             except: pass
             
+            # Heartbeat check (30 mins)
             if time.time() - last_msg_time > 1800:
-                sys_log("Heartbeat Lost (30m). Restarting...", Fore.RED)
+                sys_log("Heartbeat Lost. Restarting...", Fore.RED)
                 break 
 
             time.sleep(1)
