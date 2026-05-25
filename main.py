@@ -13,15 +13,12 @@ from seleniumbase import Driver
 from pyvirtualdisplay import Display
 from colorama import Fore, Back, Style, init
 
-# Init
 nest_asyncio.apply()
 init(autoreset=True)
 
-# =================================================================
-# Config
-# =================================================================
 TELEGRAM_BOT_TOKEN = os.environ.get("TG_TOKEN")
 TELEGRAM_CHANNEL_ID = os.environ.get("TG_CHAT_ID")
+TG_ADMIN_ID = os.environ.get("TG_ADMIN_ID")
 MY_EMAIL = os.environ.get("MY_EMAIL")
 MY_PASSWORD = os.environ.get("MY_PASSWORD")
 TARGET_URL = os.environ.get("FJ_URL")
@@ -32,19 +29,73 @@ if not TELEGRAM_BOT_TOKEN or not MY_EMAIL or not TARGET_URL:
 
 BLACKLIST_WORDS = [] 
 
-# =================================================================
-# State
-# =================================================================
 SEEN_SIGNATURES = set()
-# FIX: Use timezone-aware UTC time to match incoming data format and avoid comparison errors
 START_TIME = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=2)
+SEND_LOGS_TO_ADMIN = True
+LAST_UPDATE_ID = 0
 
-# =================================================================
-# Helpers
-# =================================================================
+def send_to_telegram_direct(chat_id, text):
+    if not TELEGRAM_BOT_TOKEN or not chat_id: return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+    try:
+        requests.post(url, json=payload, timeout=4)
+    except:
+        pass
+
 def sys_log(msg, color=Fore.WHITE):
     ts = datetime.datetime.now().strftime("%H:%M:%S")
+    clean_msg = f"[{ts}] {msg}"
     print(f"{Fore.CYAN}[{ts}]{color} {msg}{Style.RESET_ALL}")
+    
+    global SEND_LOGS_TO_ADMIN, TG_ADMIN_ID
+    if SEND_LOGS_TO_ADMIN and TG_ADMIN_ID:
+        if color in [Fore.RED, Fore.YELLOW, Fore.GREEN, Fore.CYAN, Fore.MAGENTA] or "CRITICAL" in msg or "Auth:" in msg:
+            icon = "ℹ️"
+            if color == Fore.RED: icon = "❌"
+            elif color == Fore.YELLOW: icon = "⚠️"
+            elif color == Fore.GREEN: icon = "✅"
+            elif color == Fore.MAGENTA: icon = "📦"
+            elif color == Fore.CYAN: icon = "🔷"
+            
+            formatted_msg = f"{icon} <b>[FJ Bot Log]:</b>\n<code>{clean_msg}</code>"
+            if "Failed to send" not in msg:
+                send_to_telegram_direct(TG_ADMIN_ID, formatted_msg)
+
+def init_telegram_commands():
+    global LAST_UPDATE_ID
+    if not TELEGRAM_BOT_TOKEN: return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+        res = requests.get(url, params={"limit": 1, "offset": -1}, timeout=5).json()
+        if res.get("ok") and res.get("result"):
+            LAST_UPDATE_ID = res["result"][0]["update_id"]
+    except:
+        pass
+
+def process_telegram_commands():
+    global SEND_LOGS_TO_ADMIN, LAST_UPDATE_ID
+    if not TELEGRAM_BOT_TOKEN or not TG_ADMIN_ID: return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+        params = {"offset": LAST_UPDATE_ID + 1, "timeout": 0}
+        res = requests.get(url, params=params, timeout=5).json()
+        if res.get("ok"):
+            for update in res.get("result", []):
+                LAST_UPDATE_ID = update["update_id"]
+                message = update.get("message", {})
+                from_id = message.get("from", {}).get("id")
+                text = message.get("text", "").strip()
+                
+                if str(from_id) == str(TG_ADMIN_ID):
+                    if text == "/log_on":
+                        SEND_LOGS_TO_ADMIN = True
+                        send_to_telegram_direct(TG_ADMIN_ID, "✅ <b>سیستم دیباگ پیشرفته روشن شد.</b> از این پس لاگ‌ها ارسال می‌شوند.")
+                    elif text == "/log_off":
+                        SEND_LOGS_TO_ADMIN = False
+                        send_to_telegram_direct(TG_ADMIN_ID, "❌ <b>سیستم دیباگ پیشرفته خاموش شد.</b> لاگ‌ها دیگر به پی‌وی شما ارسال نمی‌شوند.")
+        except Exception as e:
+            print(f"Error checking commands: {e}")
 
 def parse_iso_date(date_str):
     if not date_str: return None
@@ -54,7 +105,7 @@ def parse_iso_date(date_str):
              date_str += '+00:00'
         if "." in date_str: 
             date_str = date_str.split(".")[0] + "+00:00"
-        return datetime.datetime.fromisoformat(date_str)
+            return datetime.datetime.fromisoformat(date_str)
     except: return None
 
 def convert_to_tehran(utc_dt):
@@ -87,8 +138,6 @@ def dispatch_payload(data):
     raw_title = data.get('Title', data.get('FJTitle', 'No Title'))
     title = sanitize_text(raw_title)
     
-    # DEBUG: Log that we are attempting to process a title
-    # Using LIGHTBLACK_EX (Dimmed color) to not clutter critical logs
     sys_log(f"Trace: Processing '{title[:30]}...'", Fore.LIGHTBLACK_EX)
     
     publish_date = data.get('DatePublished') or data.get('PublishedDate') or data.get('PublishDate') or data.get('Date')
@@ -109,7 +158,6 @@ def dispatch_payload(data):
     if publish_date:
         dt = parse_iso_date(publish_date)
         if dt:
-            # TIME FILTER CHECK
             if dt < START_TIME: 
                 sys_log(f"Skip: Too Old (Time: {convert_to_tehran(dt)})", Fore.LIGHTBLACK_EX)
                 return
@@ -164,13 +212,10 @@ def dispatch_payload(data):
     
     try:
         requests.post(url, json=payload, timeout=5)
-        sys_log(f"Packet: SENT ({len(title)} chars)", Fore.MAGENTA)
+        sys_log(f"Packet: SENT ({len(title)} chars) to Channel", Fore.MAGENTA)
     except Exception as e:
-        sys_log(f"Net: Err {e}", Fore.RED)
+        sys_log(f"Net: Err sending to channel {e}", Fore.RED)
 
-# =================================================================
-# Spy Script
-# =================================================================
 JS_PAYLOAD = """
 window.ws_spy_active = true;
 window.ws_captured_logs = [];
@@ -186,9 +231,6 @@ window.WebSocket = function(...args) {
 };
 """
 
-# =================================================================
-# Main Loop (With Retry & Debug)
-# =================================================================
 def perform_login(driver):
     try:
         driver.get(TARGET_URL)
@@ -218,11 +260,7 @@ def perform_login(driver):
         
         time.sleep(20)
         
-        # --- DEEP DEBUG: Check Login State ---
-        # sys_log(f"Debug: Post-Login URL -> {driver.current_url}", Fore.CYAN)
-        
         cookies = driver.get_cookies()
-        
         if any('.ASPXAUTH' in c['name'] for c in cookies):
             sys_log("Debug: Auth Token (.ASPXAUTH) DETECTED! ✅", Fore.GREEN)
             return True
@@ -241,12 +279,13 @@ def perform_login(driver):
         return False
 
 def run_service():
-    sys_log(f"Core: Online (Debug Mode)", Fore.CYAN)
+    sys_log(f"Core: Online (Advanced Debug Mode)", Fore.CYAN)
     display = Display(visible=0, size=(1920, 1080))
     display.start()
     driver = Driver(uc=True, headless=False)
 
     try:
+        init_telegram_commands()
         logged_in = False
         for attempt in range(1, 4):
             sys_log(f"Auth: Attempt {attempt}/3...", Fore.YELLOW)
@@ -267,16 +306,28 @@ def run_service():
         sys_log("Link: Established", Fore.GREEN)
         
         last_msg_time = time.time()
+        last_cmd_check = 0
         
         while True:
+            if time.time() - last_cmd_check > 10:
+                process_telegram_commands()
+                last_cmd_check = time.time()
+
             try: act = driver.execute_script("return window.ws_spy_active;")
             except: act = False
 
             if not act:
                 sys_log("Spy: Injecting Payload...", Fore.YELLOW)
                 driver.execute_script(JS_PAYLOAD)
-                try: driver.execute_script("if($.connection && $.connection.hub){$.connection.hub.stop();setTimeout(()=>$.connection.hub.start(),1000);}")
-                except: pass
+                try: 
+                    has_signalr = driver.execute_script("return (typeof $ !== 'undefined' && $.connection) ? true : false;")
+                    sys_log(f"Debug: SignalR Framework Status -> {has_signalr}", Fore.CYAN)
+                    if has_signalr:
+                        driver.execute_script("if($.connection && $.connection.hub){$.connection.hub.stop();setTimeout(()=>$.connection.hub.start(),1000);}")
+                    else:
+                        sys_log("Warn: SignalR NOT found! Target site might have updated its WS infrastructure.", Fore.YELLOW)
+                except Exception as e_sig:
+                    sys_log(f"SignalR Restart Err: {e_sig}", Fore.RED)
                 time.sleep(5)
 
             try:
@@ -284,11 +335,15 @@ def run_service():
                     if (typeof window.ws_captured_logs === 'undefined') return [];
                     return window.ws_captured_logs.splice(0, window.ws_captured_logs.length);
                 """)
+                
                 if logs:
                     last_msg_time = time.time()
+                    sys_log(f"Spy: Captured {len(logs)} raw packet(s) from WebSocket.", Fore.CYAN)
+                    
                     for raw_json in logs:
-                        # Filter out empty or keep-alive packets to reduce noise
                         if raw_json == "{}" or raw_json == '{"S":1,"M":[]}': continue
+                        
+                        sys_log(f"Debug Raw WS Packet Header: {raw_json[:120]}...", Fore.MAGENTA)
                         
                         try:
                             data_obj = json.loads(raw_json)
@@ -297,20 +352,19 @@ def run_service():
                                     if 'A' in item and len(item['A']) > 0:
                                         payload_str = item['A'][0]
                                         try:
-                                            # Debug log for raw payload presence
-                                            # sys_log("Debug: Payload caught", Fore.LIGHTBLACK_EX)
                                             if isinstance(payload_str, str) and (payload_str.startswith('[') or payload_str.startswith('{')):
                                                 inner_list = json.loads(payload_str)
                                                 if isinstance(inner_list, list):
                                                     for news_item in inner_list: 
                                                         dispatch_payload(news_item)
-                                                else:
-                                                    # Single object case
-                                                    dispatch_payload(inner_list)
+                                                    else:
+                                                        dispatch_payload(inner_list)
                                         except Exception as e_inner: 
-                                            sys_log(f"Parse Err (Inner): {e_inner}", Fore.RED)
+                                            sys_log(f"Parse Err (Inner JSON structure changed?): {e_inner}", Fore.RED)
+                            else:
+                                sys_log("Warn: Key 'M' missing in valid WebSocket JSON packet.", Fore.YELLOW)
                         except Exception as e_outer:
-                            sys_log(f"Parse Err (Outer): {e_outer}", Fore.RED)
+                            sys_log(f"Parse Err (Outer JSON): {e_outer}", Fore.RED)
             except Exception as e_script:
                  sys_log(f"Spy script execution error: {e_script}", Fore.RED)
             
