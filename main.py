@@ -133,10 +133,10 @@ def generate_signature(title, date_str):
 
 def dispatch_payload(data):
     if not TELEGRAM_BOT_TOKEN: return
-    raw_title = data.get('Title', data.get('FJTitle', 'No Title'))
+    raw_title = data.get('Title', data.get('FJTitle', data.get('title', data.get('headline', data.get('text', 'No Title')))))
     title = sanitize_text(raw_title)
     sys_log(f"Trace: Processing '{title[:30]}...'", Fore.LIGHTBLACK_EX)
-    publish_date = data.get('DatePublished') or data.get('PublishedDate') or data.get('PublishDate') or data.get('Date')
+    publish_date = data.get('DatePublished') or data.get('PublishedDate') or data.get('PublishDate') or data.get('Date') or data.get('date')
     for word in BLACKLIST_WORDS:
         if word.lower() in title.lower(): 
             sys_log(f"Skip: Blacklisted word ({word})", Fore.LIGHTBLACK_EX)
@@ -158,20 +158,20 @@ def dispatch_payload(data):
             sys_log("Warn: Date Parse Failed", Fore.YELLOW)
     else:
          sys_log("Warn: No Date Field", Fore.YELLOW)
-    news_id = data.get('NewsID', data.get('Id', '-'))
+    news_id = data.get('NewsID', data.get('Id', data.get('id', '-')))
     tags = data.get('Tags', [])
-    tags_str = ", ".join([str(t.get('Name')) for t in tags]) if tags else "-"
-    breaking = data.get('Breaking', False)
-    level = data.get('Level', '-')
+    tags_str = ", ".join([str(t.get('Name')) for t in tags]) if tags and isinstance(tags, list) else "-"
+    breaking = data.get('Breaking', data.get('breaking', False))
+    level = data.get('Level', data.get('level', '-'))
     r_link = data.get('RURL', '')
     e_link = data.get('EURL', '')
     if not r_link: r_link = "-"
     if not e_link: e_link = "-"
     labels = data.get('Labels', [])
-    labels_str = ", ".join([str(l) for l in labels]) if labels else "-"
+    labels_str = ", ".join([str(l) for l in labels]) if labels and isinstance(labels, list) else "-"
     img_link = data.get('Img', '-')
     if not img_link: img_link = "-"
-    description = sanitize_text(data.get('Description', ''))
+    description = sanitize_text(data.get('Description', data.get('description', '')))
     actual = data.get('Actual')
     forecast = data.get('Forecast')
     previous = data.get('Previous')
@@ -218,7 +218,7 @@ window.fetch = async function(...args) {
   const clone = response.clone();
   try {
     const text = await clone.text();
-    if (text && (text.includes('Title') || text.includes('title') || text.includes('news') || text.includes('News'))) {
+    if (text && text.trim().length > 0) {
       window.net_captured_logs.push({source: 'FETCH', data: text});
     }
   } catch (e) {}
@@ -234,13 +234,25 @@ XMLHttpRequest.prototype.send = function(...args) {
   this.addEventListener('load', function() {
     try {
       const text = this.responseText;
-      if (text && (text.includes('Title') || text.includes('title') || text.includes('news') || text.includes('News'))) {
+      if (text && text.trim().length > 0) {
         window.net_captured_logs.push({source: 'XHR', data: text});
       }
     } catch (e) {}
   });
   return nativeSend.call(this, ...args);
 };
+const nativeEventSource = window.EventSource;
+if (nativeEventSource) {
+  window.EventSource = function(...args) {
+    const source = new nativeEventSource(...args);
+    source.addEventListener('message', function(event) {
+      if (window.net_captured_logs && event.data) {
+        window.net_captured_logs.push({source: 'SSE', data: event.data});
+      }
+    });
+    return source;
+  };
+}
 """
 
 def perform_login(driver):
