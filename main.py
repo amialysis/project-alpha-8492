@@ -89,10 +89,10 @@ def process_telegram_commands():
                 if str(from_id) == str(TG_ADMIN_ID):
                     if text == "/log_on":
                         SEND_LOGS_TO_ADMIN = True
-                        send_to_telegram_direct(TG_ADMIN_ID, "✅ <b>سیستم دیباگ پیشرفته روشن شد.</b> از این پس لاگ‌ها ارسال می‌شوند.")
+                        send_to_telegram_direct(TG_ADMIN_ID, "✅ <b>Advanced Debug System Enabled.</b> Logs will be sent from now on.")
                     elif text == "/log_off":
                         SEND_LOGS_TO_ADMIN = False
-                        send_to_telegram_direct(TG_ADMIN_ID, "❌ <b>سیستم دیباگ پیشرفته خاموش شد.</b> لاگ‌ها دیگر به پی‌وی شما ارسال نمی‌شوند.")
+                        send_to_telegram_direct(TG_ADMIN_ID, "❌ <b>Advanced Debug System Disabled.</b> Logs will no longer be sent.")
     except Exception as e:
         print(f"Error checking commands: {e}")
 
@@ -301,10 +301,10 @@ def run_service():
                 """)
                 if logs:
                     last_msg_time = time.time()
-                    sys_log(f"Spy: Captured {len(logs)} raw packet(s) from WebSocket.", Fore.CYAN)
                     for raw_json in logs:
-                        sys_log(f"Debug Raw WS Packet Header: {raw_json[:120]}...", Fore.MAGENTA)
                         if raw_json == "{}" or raw_json == '{"S":1,"M":[]}': continue
+                        sys_log(f"Spy: Captured non-empty packet from WebSocket.", Fore.CYAN)
+                        sys_log(f"Debug Raw WS Packet Header: {raw_json[:120]}...", Fore.MAGENTA)
                         try:
                             data_obj = json.loads(raw_json)
                             if 'M' in data_obj:
