@@ -89,10 +89,10 @@ def process_telegram_commands():
                 if str(from_id) == str(TG_ADMIN_ID):
                     if text == "/log_on":
                         SEND_LOGS_TO_ADMIN = True
-                        send_to_telegram_direct(TG_ADMIN_ID, "✅ <b>Advanced Debug System Enabled.</b> Logs will be sent from now on.")
+                        send_to_telegram_direct(TG_ADMIN_ID, "<b>Advanced Debug System Enabled.</b> Logs will be sent from now on.")
                     elif text == "/log_off":
                         SEND_LOGS_TO_ADMIN = False
-                        send_to_telegram_direct(TG_ADMIN_ID, "❌ <b>Advanced Debug System Disabled.</b> Logs will no longer be sent.")
+                        send_to_telegram_direct(TG_ADMIN_ID, "<b>Advanced Debug System Disabled.</b> Logs will no longer be sent.")
     except Exception as e:
         print(f"Error checking commands: {e}")
 
@@ -200,17 +200,46 @@ def dispatch_payload(data):
         sys_log(f"Net: Err sending to channel {e}", Fore.RED)
 
 JS_PAYLOAD = """
-window.ws_spy_active = true;
-window.ws_captured_logs = [];
+window.net_spy_active = true;
+window.net_captured_logs = [];
 const nativeWebSocket = window.WebSocket;
 window.WebSocket = function(...args) {
   const socket = new nativeWebSocket(...args);
   socket.addEventListener('message', function(event) {
-    if(window.ws_captured_logs) {
-        window.ws_captured_logs.push(event.data);
+    if(window.net_captured_logs && event.data && event.data !== '{}' && event.data !== '{"S":1,"M":[]}') {
+        window.net_captured_logs.push({source: 'WS', data: event.data});
     }
   });
   return socket;
+};
+const nativeFetch = window.fetch;
+window.fetch = async function(...args) {
+  const response = await nativeFetch(...args);
+  const clone = response.clone();
+  try {
+    const text = await clone.text();
+    if (text && (text.includes('Title') || text.includes('title') || text.includes('news') || text.includes('News'))) {
+      window.net_captured_logs.push({source: 'FETCH', data: text});
+    }
+  } catch (e) {}
+  return response;
+};
+const nativeOpen = XMLHttpRequest.prototype.open;
+XMLHttpRequest.prototype.open = function(method, url, ...args) {
+  this._url = url;
+  return nativeOpen.call(this, method, url, ...args);
+};
+const nativeSend = XMLHttpRequest.prototype.send;
+XMLHttpRequest.prototype.send = function(...args) {
+  this.addEventListener('load', function() {
+    try {
+      const text = this.responseText;
+      if (text && (text.includes('Title') || text.includes('title') || text.includes('news') || text.includes('News'))) {
+        window.net_captured_logs.push({source: 'XHR', data: text});
+      }
+    } catch (e) {}
+  });
+  return nativeSend.call(this, ...args);
 };
 """
 
@@ -279,39 +308,35 @@ def run_service():
             if time.time() - last_cmd_check > 10:
                 process_telegram_commands()
                 last_cmd_check = time.time()
-            try: act = driver.execute_script("return window.ws_spy_active;")
+            try: act = driver.execute_script("return window.net_spy_active;")
             except: act = False
             if not act:
-                sys_log("Spy: Injecting Payload...", Fore.YELLOW)
+                sys_log("Spy: Injecting Network Sniffer...", Fore.YELLOW)
                 driver.execute_script(JS_PAYLOAD)
-                try: 
-                    has_signalr = driver.execute_script("return (typeof $ !== 'undefined' && $.connection) ? true : false;")
-                    sys_log(f"Debug: SignalR Framework Status -> {has_signalr}", Fore.CYAN)
-                    if has_signalr:
-                        driver.execute_script("if($.connection && $.connection.hub){$.connection.hub.stop();setTimeout(()=>$.connection.hub.start(),1000);}")
-                    else:
-                        sys_log("Warn: SignalR NOT found! Target site might have updated its WS infrastructure.", Fore.YELLOW)
-                except Exception as e_sig:
-                    sys_log(f"SignalR Restart Err: {e_sig}", Fore.RED)
                 time.sleep(5)
             try:
                 logs = driver.execute_script("""
-                    if (typeof window.ws_captured_logs === 'undefined') return [];
-                    return window.ws_captured_logs.splice(0, window.ws_captured_logs.length);
+                    if (typeof window.net_captured_logs === 'undefined') return [];
+                    return window.net_captured_logs.splice(0, window.net_captured_logs.length);
                 """)
                 if logs:
                     last_msg_time = time.time()
-                    for raw_json in logs:
-                        if raw_json == "{}" or raw_json == '{"S":1,"M":[]}': continue
-                        sys_log(f"Spy: Captured non-empty packet from WebSocket.", Fore.CYAN)
-                        sys_log(f"Debug Raw WS Packet Header: {raw_json[:120]}...", Fore.MAGENTA)
+                    for packet in logs:
+                        src = packet.get("source", "UNKNOWN")
+                        raw_json = packet.get("data", "")
+                        sys_log(f"Captured non-empty packet from {src}.", Fore.CYAN)
+                        sys_log(f"Debug Raw Packet Data: {raw_json[:150]}...", Fore.MAGENTA)
                         try:
                             data_obj = json.loads(raw_json)
-                            if 'M' in data_obj:
-                                for item in data_obj['M']:
-                                    if 'A' in item and len(item['A']) > 0:
-                                        payload_str = item['A'][0]
-                                        try:
+                            if isinstance(data_obj, list):
+                                for item in data_obj:
+                                    if isinstance(item, dict):
+                                        dispatch_payload(item)
+                            elif isinstance(data_obj, dict):
+                                if 'M' in data_obj:
+                                    for item in data_obj['M']:
+                                        if 'A' in item and len(item['A']) > 0:
+                                            payload_str = item['A'][0]
                                             if isinstance(payload_str, str) and (payload_str.startswith('[') or payload_str.startswith('{')):
                                                 inner_list = json.loads(payload_str)
                                                 if isinstance(inner_list, list):
@@ -319,12 +344,10 @@ def run_service():
                                                         dispatch_payload(news_item)
                                                 else:
                                                     dispatch_payload(inner_list)
-                                        except Exception as e_inner: 
-                                            sys_log(f"Parse Err (Inner JSON structure changed?): {e_inner}", Fore.RED)
-                            else:
-                                sys_log("Warn: Key 'M' missing in valid WebSocket JSON packet.", Fore.YELLOW)
-                        except Exception as e_outer:
-                            sys_log(f"Parse Err (Outer JSON): {e_outer}", Fore.RED)
+                                else:
+                                    dispatch_payload(data_obj)
+                        except:
+                            pass
             except Exception as e_script:
                  sys_log(f"Spy script execution error: {e_script}", Fore.RED)
             if time.time() - last_msg_time > 1800:
