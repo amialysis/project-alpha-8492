@@ -303,8 +303,8 @@ def run_service():
                     last_msg_time = time.time()
                     sys_log(f"Spy: Captured {len(logs)} raw packet(s) from WebSocket.", Fore.CYAN)
                     for raw_json in logs:
-                        if raw_json == "{}" or raw_json == '{"S":1,"M":[]}': continue
                         sys_log(f"Debug Raw WS Packet Header: {raw_json[:120]}...", Fore.MAGENTA)
+                        if raw_json == "{}" or raw_json == '{"S":1,"M":[]}': continue
                         try:
                             data_obj = json.loads(raw_json)
                             if 'M' in data_obj:
