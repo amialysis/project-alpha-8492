@@ -36,7 +36,6 @@ BLACKLIST_WORDS = []
 # State
 # =================================================================
 SEEN_SIGNATURES = set()
-# FIX: Use timezone-aware UTC time to match incoming data format and avoid comparison errors
 START_TIME = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=2)
 
 # =================================================================
@@ -87,8 +86,6 @@ def dispatch_payload(data):
     raw_title = data.get('Title', data.get('FJTitle', 'No Title'))
     title = sanitize_text(raw_title)
     
-    # DEBUG: Log that we are attempting to process a title
-    # Using LIGHTBLACK_EX (Dimmed color) to not clutter critical logs
     sys_log(f"Trace: Processing '{title[:30]}...'", Fore.LIGHTBLACK_EX)
     
     publish_date = data.get('DatePublished') or data.get('PublishedDate') or data.get('PublishDate') or data.get('Date')
@@ -109,7 +106,6 @@ def dispatch_payload(data):
     if publish_date:
         dt = parse_iso_date(publish_date)
         if dt:
-            # TIME FILTER CHECK
             if dt < START_TIME: 
                 sys_log(f"Skip: Too Old (Time: {convert_to_tehran(dt)})", Fore.LIGHTBLACK_EX)
                 return
@@ -172,18 +168,38 @@ def dispatch_payload(data):
 # Spy Script
 # =================================================================
 JS_PAYLOAD = """
-window.ws_spy_active = true;
-window.ws_captured_logs = [];
-const nativeWebSocket = window.WebSocket;
-window.WebSocket = function(...args) {
-  const socket = new nativeWebSocket(...args);
-  socket.addEventListener('message', function(event) {
-    if(window.ws_captured_logs) {
-        window.ws_captured_logs.push(event.data);
+window.ws_captured_logs = window.ws_captured_logs || [];
+if (window._fjCentrifuge) {
+    function findWebSocketInMemory(obj, depth = 0) {
+        if (depth > 6 || !obj) return null;
+        if (obj instanceof WebSocket) return obj;
+        for (let key in obj) {
+            try {
+                if (obj[key] instanceof WebSocket) return obj[key];
+                if (typeof obj[key] === 'object' && obj[key] !== null) {
+                    let found = findWebSocketInMemory(obj[key], depth + 1);
+                    if (found) return found;
+                }
+            } catch(e) {}
+        }
+        return null;
     }
-  });
-  return socket;
-};
+    let activeWS = findWebSocketInMemory(window._fjCentrifuge);
+    if (activeWS) {
+        if (!activeWS.memory_spy_installed) {
+            activeWS.addEventListener('message', function(event) {
+                if (window.ws_captured_logs) {
+                    window.ws_captured_logs.push(event.data);
+                }
+            });
+            activeWS.memory_spy_installed = true;
+            return "CONNECTED";
+        }
+        return "STABLE";
+    }
+    return "NO_SOCKET";
+}
+return "NO_INSTANCE";
 """
 
 # =================================================================
@@ -218,22 +234,12 @@ def perform_login(driver):
         
         time.sleep(20)
         
-        # --- DEEP DEBUG: Check Login State ---
-        # sys_log(f"Debug: Post-Login URL -> {driver.current_url}", Fore.CYAN)
-        
         cookies = driver.get_cookies()
-        
         if any('.ASPXAUTH' in c['name'] for c in cookies):
             sys_log("Debug: Auth Token (.ASPXAUTH) DETECTED! ✅", Fore.GREEN)
             return True
         
         sys_log("Debug: Auth Token MISSING. Checking page for errors...", Fore.RED)
-        try:
-            body_text = driver.find_element("tag name", "body").text
-            if "Invalid login" in body_text or "failed" in body_text:
-                sys_log("Debug: Detected Login Error Message on page.", Fore.RED)
-        except: pass
-        
         return False
 
     except Exception as e:
@@ -265,19 +271,19 @@ def run_service():
             sys.exit(1)
         
         sys_log("Link: Established", Fore.GREEN)
-        
         last_msg_time = time.time()
         
         while True:
-            try: act = driver.execute_script("return window.ws_spy_active;")
-            except: act = False
+            try: 
+                hook_report = driver.execute_script(JS_PAYLOAD)
+            except: 
+                hook_report = "ERROR"
 
-            if not act:
-                sys_log("Spy: Injecting Payload...", Fore.YELLOW)
-                driver.execute_script(JS_PAYLOAD)
-                try: driver.execute_script("if($.connection && $.connection.hub){$.connection.hub.stop();setTimeout(()=>$.connection.hub.start(),1000);}")
-                except: pass
-                time.sleep(5)
+            if hook_report == "CONNECTED":
+                sys_log("Bridge: Bound Link Active", Fore.GREEN)
+            elif hook_report == "NO_INSTANCE":
+                time.sleep(1)
+                continue
 
             try:
                 logs = driver.execute_script("""
@@ -286,39 +292,42 @@ def run_service():
                 """)
                 if logs:
                     last_msg_time = time.time()
-                    for raw_json in logs:
-                        # Filter out empty or keep-alive packets to reduce noise
-                        if raw_json == "{}" or raw_json == '{"S":1,"M":[]}': continue
+                    for raw_msg in logs:
+                        if raw_msg in ["{}", "[]", "h", "3", "2", "1", "0", "null", "undefined"] or '{"type":"ping"}' in raw_msg.replace(" ", ""):
+                            continue
                         
                         try:
-                            data_obj = json.loads(raw_json)
-                            if 'M' in data_obj:
-                                for item in data_obj['M']:
-                                    if 'A' in item and len(item['A']) > 0:
-                                        payload_str = item['A'][0]
-                                        try:
-                                            # Debug log for raw payload presence
-                                            # sys_log("Debug: Payload caught", Fore.LIGHTBLACK_EX)
-                                            if isinstance(payload_str, str) and (payload_str.startswith('[') or payload_str.startswith('{')):
-                                                inner_list = json.loads(payload_str)
-                                                if isinstance(inner_list, list):
-                                                    for news_item in inner_list: 
-                                                        dispatch_payload(news_item)
-                                                else:
-                                                    # Single object case
-                                                    dispatch_payload(inner_list)
-                                        except Exception as e_inner: 
-                                            sys_log(f"Parse Err (Inner): {e_inner}", Fore.RED)
-                        except Exception as e_outer:
-                            sys_log(f"Parse Err (Outer): {e_outer}", Fore.RED)
+                            data = json.loads(raw_msg)
+                            target_payload = data
+                            if isinstance(data, dict) and "push" in data and "pub" in data["push"]:
+                                target_payload = data["push"]["pub"].get("data", {})
+                            elif isinstance(data, dict) and "pub" in data:
+                                target_payload = data["pub"].get("data", {})
+
+                            if isinstance(target_payload, dict) and "msg" in target_payload:
+                                try:
+                                    msg_content = target_payload["msg"]
+                                    inner_data = json.loads(msg_content) if isinstance(msg_content, str) else msg_content
+                                    if isinstance(inner_data, list):
+                                        for news_item in inner_data:
+                                            dispatch_payload(news_item)
+                                    elif isinstance(inner_data, dict):
+                                        dispatch_payload(inner_data)
+                                except:
+                                    pass
+                            else:
+                                if isinstance(target_payload, dict) and any(k in target_payload for k in ['Title', 'Text', 'title', 'text']):
+                                    dispatch_payload(target_payload)
+                        except:
+                            pass
             except Exception as e_script:
-                 sys_log(f"Spy script execution error: {e_script}", Fore.RED)
+                 sys_log(f"Pipeline sync alert: {e_script}", Fore.RED)
             
             if time.time() - last_msg_time > 1800:
                 sys_log("Heartbeat Lost (30m). Restarting...", Fore.RED)
                 break 
 
-            time.sleep(1)
+            time.sleep(0.5)
 
     except KeyboardInterrupt: pass
     finally:
