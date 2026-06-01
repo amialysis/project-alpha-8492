@@ -7,12 +7,12 @@ concurrency:
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */5 * * *'
+    - cron: '0 */4 * * *'
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 260
     
     steps:
       - name: Checkout code
