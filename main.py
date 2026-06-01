@@ -81,7 +81,6 @@ def generate_signature(title, date_str):
     return hashlib.md5(raw.encode('utf-8')).hexdigest()
 
 def extract_news_node(node):
-    """Deep structural recursive scanner to salvage complete data nodes with zero drops"""
     if isinstance(node, dict):
         for key in ['Title', 'Text', 'Headline', 'title', 'text', 'headline', 'EventTitle']:
             if key in node and isinstance(node[key], str) and len(node[key]) > 20 and "{" not in node[key]:
@@ -254,7 +253,7 @@ def perform_login(driver):
         time.sleep(3)
 
         driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputEmail").clear()
-        driver.find_element("css keys", "#ctl00_SignInSignUp_loginForm1_inputEmail").send_keys(MY_EMAIL)
+        driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputEmail").send_keys(MY_EMAIL)
         
         driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputPassword").clear()
         driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputPassword").send_keys(MY_PASSWORD)
@@ -329,17 +328,14 @@ def run_service():
                         try:
                             parsed_data = json.loads(raw_msg)
                             
-                            # Filter system state logs
                             if isinstance(parsed_data, dict) and ('newState' in parsed_data or ('channel' in parsed_data and 'positioned' in parsed_data)):
                                 continue
                             
-                            # Deep scan for target payload node
                             news_node = extract_news_node(parsed_data)
                             
                             if news_node and isinstance(news_node, dict):
                                 dispatch_payload(news_node)
                             elif len(raw_msg) > 30 and "{" not in raw_msg:
-                                # Fallback raw frame
                                 dispatch_payload({"Title": raw_msg})
                                 
                         except:
