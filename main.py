@@ -80,10 +80,32 @@ def generate_signature(title, date_str):
     raw = f"{title}_{date_str if date_str else 'ND'}"
     return hashlib.md5(raw.encode('utf-8')).hexdigest()
 
+def extract_news_node(node):
+    """Deep structural recursive scanner to salvage complete data nodes with zero drops"""
+    if isinstance(node, dict):
+        for key in ['Title', 'Text', 'Headline', 'title', 'text', 'headline', 'EventTitle']:
+            if key in node and isinstance(node[key], str) and len(node[key]) > 20 and "{" not in node[key]:
+                return node
+        for val in node.values():
+            if isinstance(val, (dict, list)):
+                res = extract_news_node(val)
+                if res: return res
+            elif isinstance(val, str) and (val.startswith('{') or val.startswith('[')):
+                try:
+                    decoded = json.loads(val)
+                    res = extract_news_node(decoded)
+                    if res: return res
+                except: pass
+    elif isinstance(node, list):
+        for item in node:
+            res = extract_news_node(item)
+            if res: return res
+    return None
+
 def dispatch_payload(data):
     if not TELEGRAM_BOT_TOKEN: return
     
-    raw_title = data.get('Title', data.get('FJTitle', 'No Title'))
+    raw_title = data.get('Title', data.get('FJTitle', data.get('Text', data.get('Headline', 'No Title'))))
     title = sanitize_text(raw_title)
     
     sys_log(f"Trace: Processing '{title[:30]}...'", Fore.LIGHTBLACK_EX)
@@ -151,7 +173,7 @@ def dispatch_payload(data):
     msg += f"Img: {img_link}\n"
     msg += f"DatePublished: {news_time_str}\n"
 
-    if actual or forecast:
+    if actual or forecast or previous:
         msg += "\n<b>DATA:</b>\n"
         msg += f"Act: {actual} | Fcst: {forecast} | Prev: {previous}\n"
 
@@ -170,34 +192,42 @@ def dispatch_payload(data):
 JS_PAYLOAD = """
 window.ws_captured_logs = window.ws_captured_logs || [];
 if (window._fjCentrifuge) {
-    function findWebSocketInMemory(obj, depth = 0) {
-        if (depth > 6 || !obj) return null;
-        if (obj instanceof WebSocket) return obj;
-        for (let key in obj) {
-            try {
-                if (obj[key] instanceof WebSocket) return obj[key];
-                if (typeof obj[key] === 'object' && obj[key] !== null) {
-                    let found = findWebSocketInMemory(obj[key], depth + 1);
-                    if (found) return found;
-                }
-            } catch(e) {}
+    if (!window._fjCentrifuge.spy_installed) {
+        if (typeof window._fjCentrifuge._dispatch === 'function') {
+            const origDispatch = window._fjCentrifuge._dispatch;
+            window._fjCentrifuge._dispatch = function(msg) {
+                try {
+                    if (msg) {
+                        let strData = typeof msg === 'object' ? JSON.stringify(msg) : String(msg);
+                        window.ws_captured_logs.push(strData);
+                    }
+                } catch(err){}
+                return origDispatch.apply(this, arguments);
+            };
+            window._fjCentrifuge.spy_installed = true;
+            return "CONNECTED_A";
         }
-        return null;
-    }
-    let activeWS = findWebSocketInMemory(window._fjCentrifuge);
-    if (activeWS) {
-        if (!activeWS.memory_spy_installed) {
-            activeWS.addEventListener('message', function(event) {
-                if (window.ws_captured_logs) {
-                    window.ws_captured_logs.push(event.data);
-                }
-            });
-            activeWS.memory_spy_installed = true;
-            return "CONNECTED";
+        if (typeof window._fjCentrifuge.emit === 'function') {
+            const origEmit = window._fjCentrifuge.emit;
+            window._fjCentrifuge.emit = function(event, ...args) {
+                try {
+                    if (args && args.length > 0) {
+                        args.forEach(arg => {
+                            if (arg) {
+                                let strData = typeof arg === 'object' ? JSON.stringify(arg) : String(arg);
+                                window.ws_captured_logs.push(strData);
+                            }
+                        });
+                    }
+                } catch(err){}
+                return origEmit.apply(this, arguments);
+            };
+            window._fjCentrifuge.spy_installed = true;
+            return "CONNECTED_B";
         }
-        return "STABLE";
+        return "METHODS_NOT_FOUND";
     }
-    return "NO_SOCKET";
+    return "STABLE";
 }
 return "NO_INSTANCE";
 """
@@ -224,7 +254,7 @@ def perform_login(driver):
         time.sleep(3)
 
         driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputEmail").clear()
-        driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputEmail").send_keys(MY_EMAIL)
+        driver.find_element("css keys", "#ctl00_SignInSignUp_loginForm1_inputEmail").send_keys(MY_EMAIL)
         
         driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputPassword").clear()
         driver.find_element("css selector", "#ctl00_SignInSignUp_loginForm1_inputPassword").send_keys(MY_PASSWORD)
@@ -279,7 +309,7 @@ def run_service():
             except: 
                 hook_report = "ERROR"
 
-            if hook_report == "CONNECTED":
+            if "CONNECTED" in str(hook_report):
                 sys_log("Bridge: Bound Link Active", Fore.GREEN)
             elif hook_report == "NO_INSTANCE":
                 time.sleep(1)
@@ -297,29 +327,24 @@ def run_service():
                             continue
                         
                         try:
-                            data = json.loads(raw_msg)
-                            target_payload = data
-                            if isinstance(data, dict) and "push" in data and "pub" in data["push"]:
-                                target_payload = data["push"]["pub"].get("data", {})
-                            elif isinstance(data, dict) and "pub" in data:
-                                target_payload = data["pub"].get("data", {})
-
-                            if isinstance(target_payload, dict) and "msg" in target_payload:
-                                try:
-                                    msg_content = target_payload["msg"]
-                                    inner_data = json.loads(msg_content) if isinstance(msg_content, str) else msg_content
-                                    if isinstance(inner_data, list):
-                                        for news_item in inner_data:
-                                            dispatch_payload(news_item)
-                                    elif isinstance(inner_data, dict):
-                                        dispatch_payload(inner_data)
-                                except:
-                                    pass
-                            else:
-                                if isinstance(target_payload, dict) and any(k in target_payload for k in ['Title', 'Text', 'title', 'text']):
-                                    dispatch_payload(target_payload)
+                            parsed_data = json.loads(raw_msg)
+                            
+                            # Filter system state logs
+                            if isinstance(parsed_data, dict) and ('newState' in parsed_data or ('channel' in parsed_data and 'positioned' in parsed_data)):
+                                continue
+                            
+                            # Deep scan for target payload node
+                            news_node = extract_news_node(parsed_data)
+                            
+                            if news_node and isinstance(news_node, dict):
+                                dispatch_payload(news_node)
+                            elif len(raw_msg) > 30 and "{" not in raw_msg:
+                                # Fallback raw frame
+                                dispatch_payload({"Title": raw_msg})
+                                
                         except:
-                            pass
+                            if len(raw_msg) > 30 and "{" not in raw_msg:
+                                dispatch_payload({"Title": raw_msg})
             except Exception as e_script:
                  sys_log(f"Pipeline sync alert: {e_script}", Fore.RED)
             
