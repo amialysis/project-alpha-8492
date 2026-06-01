@@ -300,7 +300,6 @@ def run_service():
             sys.exit(1)
         
         sys_log("Link: Established", Fore.GREEN)
-        last_msg_time = time.time()
         
         while True:
             try: 
@@ -320,7 +319,6 @@ def run_service():
                     return window.ws_captured_logs.splice(0, window.ws_captured_logs.length);
                 """)
                 if logs:
-                    last_msg_time = time.time()
                     for raw_msg in logs:
                         if raw_msg in ["{}", "[]", "h", "3", "2", "1", "0", "null", "undefined"] or '{"type":"ping"}' in raw_msg.replace(" ", ""):
                             continue
@@ -343,10 +341,6 @@ def run_service():
                                 dispatch_payload({"Title": raw_msg})
             except Exception as e_script:
                  sys_log(f"Pipeline sync alert: {e_script}", Fore.RED)
-            
-            if time.time() - last_msg_time > 1800:
-                sys_log("Heartbeat Lost (30m). Restarting...", Fore.RED)
-                break 
 
             time.sleep(0.5)
 
