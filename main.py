@@ -13,7 +13,7 @@ from seleniumbase import Driver
 from pyvirtualdisplay import Display
 from colorama import Fore, Back, Style, init
 
-# Init
+# Init one
 nest_asyncio.apply()
 init(autoreset=True)
 
