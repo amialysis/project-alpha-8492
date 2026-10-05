@@ -13,12 +13,12 @@ from seleniumbase import Driver
 from pyvirtualdisplay import Display
 from colorama import Fore, Back, Style, init
 
-# Init one
+# Init
 nest_asyncio.apply()
 init(autoreset=True)
 
 # =================================================================
-# Config
+# 
 # =================================================================
 TELEGRAM_BOT_TOKEN = os.environ.get("TG_TOKEN")
 TELEGRAM_CHANNEL_ID = os.environ.get("TG_CHAT_ID")
