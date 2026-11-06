@@ -13,33 +13,39 @@ jobs:
   run-bot:
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.11'
+          cache: 'pip'
 
       - name: Install System Deps & Chrome
         run: |
-          sudo apt-get update
-          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb xvfb
+          if ! command -v google-chrome >/dev/null 2>&1; then
+            sudo apt-get update
+            wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+            sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+          fi
+          if ! command -v xvfb-run >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y xvfb
+          fi
 
       - name: Install Python Libs
         run: |
-          pip install --upgrade pip
-          pip install seleniumbase pyvirtualdisplay colorama nest_asyncio requests pytz
+          pip install -r requirements.txt
 
       - name: Install Driver
         run: |
           seleniumbase install chromedriver
 
       - name: Run Bot
-        env: 
+        env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           TG_ADMIN_ID: ${{ secrets.TG_ADMIN_ID }}
