@@ -1,0 +1,6 @@
+seleniumbase
+pyvirtualdisplay
+colorama
+nest_asyncio
+requests
+pytz
